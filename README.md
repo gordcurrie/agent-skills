@@ -6,7 +6,7 @@ A collection of [Agent Skills](https://agentskills.io/) for use with GitHub Copi
 
 | Skill | Description |
 |---|---|
-| [`generate-mcp`](.github/skills/generate-mcp/SKILL.md) | End-to-end guide for building a production-quality Go MCP server — from API research through CI and release automation |
+| [`generate-mcp`](skills/generate-mcp/SKILL.md) | End-to-end guide for building a production-quality Go MCP server — from API research through CI and release automation |
 
 ## Usage
 
@@ -15,7 +15,7 @@ A collection of [Agent Skills](https://agentskills.io/) for use with GitHub Copi
 Copy the skill directory into your repository:
 
 ```bash
-cp -r .github/skills/generate-mcp /path/to/your-repo/.github/skills/
+cp -r skills/generate-mcp /path/to/your-repo/.github/skills/
 ```
 
 ### Personal skill (all projects)
@@ -23,9 +23,9 @@ cp -r .github/skills/generate-mcp /path/to/your-repo/.github/skills/
 Copy the skill directory to your home directory:
 
 ```bash
-cp -r .github/skills/generate-mcp ~/.copilot/skills/
+cp -r skills/generate-mcp ~/.copilot/skills/
 # or for Claude:
-cp -r .github/skills/generate-mcp ~/.claude/skills/
+cp -r skills/generate-mcp ~/.claude/skills/
 ```
 
 Copilot will automatically load the skill when you ask it to create a new MCP server.
