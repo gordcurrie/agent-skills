@@ -1,0 +1,35 @@
+# agent-skills
+
+A collection of [Agent Skills](https://agentskills.io/) for use with GitHub Copilot, Claude, and other AI coding assistants.
+
+## Skills
+
+| Skill | Description |
+|---|---|
+| [`generate-mcp`](.github/skills/generate-mcp/SKILL.md) | End-to-end guide for building a production-quality Go MCP server — from API research through CI and release automation |
+
+## Usage
+
+### Project skill (single repository)
+
+Copy the skill directory into your repository:
+
+```bash
+cp -r .github/skills/generate-mcp /path/to/your-repo/.github/skills/
+```
+
+### Personal skill (all projects)
+
+Copy the skill directory to your home directory:
+
+```bash
+cp -r .github/skills/generate-mcp ~/.copilot/skills/
+# or for Claude:
+cp -r .github/skills/generate-mcp ~/.claude/skills/
+```
+
+Copilot will automatically load the skill when you ask it to create a new MCP server.
+
+## License
+
+MIT
