@@ -74,6 +74,7 @@ tools/
         release.yml
     copilot-instructions.md
 Makefile
+.golangci.yml
 go.mod
 README.md
 PLAN.md
@@ -665,6 +666,110 @@ clean: ; rm -f $(BINARY)
 
 ---
 
+## Phase 6.5 — Linter configuration
+
+### `.golangci.yml`
+
+Commit a `.golangci.yml` at the repo root. Start from this baseline (derived from
+[gordcurrie/unifi-mcp](https://github.com/gordcurrie/unifi-mcp)) and adjust as needed:
+
+```yaml
+version: "2"
+
+run:
+  timeout: 5m
+
+linters:
+  default: none
+  enable:
+    - bodyclose      # response body must be closed
+    - errcheck       # all errors must be handled
+    - gocritic       # opinionated style + performance checks
+    - govet          # go vet passes
+    - ineffassign    # no ineffectual assignments
+    - misspell       # no misspelled comments/strings
+    - noctx          # HTTP requests must carry a context
+    - prealloc       # suggest slice pre-allocation
+    - revive         # idiomatic Go style
+    - staticcheck    # advanced static analysis
+    - unconvert      # no unnecessary type conversions
+    - unparam        # no parameters that are always the same value
+    - gosec          # security checks
+
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - performance
+        - style
+    revive:
+      rules:
+        - name: exported
+          disabled: false
+    gosec:
+      excludes: []
+
+formatters:
+  enable:
+    - gofumpt
+  settings:
+    gofumpt:
+      extra-rules: true
+```
+
+> **Why `default: none` + explicit `enable`?** An allowlist means new linters added in
+> future golangci-lint releases don't silently appear and break CI. You opt in
+> deliberately.
+
+### `//nolint` policy
+
+`//nolint` directives are a last resort, not a convenience. Follow this policy:
+
+**Always prefer fixing the issue over suppressing it.** The only broadly acceptable
+suppressions are for *genuine false positives* or *intentional security trade-offs*
+that the codebase documents explicitly.
+
+**Rules:**
+
+1. **Always include a comment explaining why.** A bare `//nolint:gosec` is not acceptable.
+   The comment must explain the reasoning for a human reviewer, not just satisfy the tool.
+
+   ```go
+   // OK — explains why the flag is safe and when it is set
+   //nolint:gosec // G402: InsecureSkipVerify is only set when <SERVICE>_INSECURE=true, explicit user opt-in
+   t.TLSClientConfig.InsecureSkipVerify = true // #nosec G402
+
+   // NOT OK — no explanation
+   //nolint:gosec
+   t.TLSClientConfig.InsecureSkipVerify = true
+   ```
+
+2. **Name the specific linter(s).** Use `//nolint:gosec` not `//nolint`.
+   Suppressing all linters on a line hides future findings.
+
+3. **Use line-level suppression, not file-level.** Never put `//nolint` at the top of
+   a file unless the entire file is generated code.
+
+4. **Never suppress `errcheck` without a deliberate reason.** If you are genuinely
+   discarding an error (e.g. `defer resp.Body.Close()`), add a comment:
+
+   ```go
+   defer resp.Body.Close() //nolint:errcheck // response body close error on read path is non-actionable
+   ```
+
+5. **`gosec` suppressions need both annotations.** `gosec` uses its own `// #nosec GN`
+   marker in addition to the golangci-lint `//nolint` directive:
+
+   ```go
+   //nolint:gosec // G402: skipping TLS verification is intentional, opt-in via env var
+   t.TLSClientConfig.InsecureSkipVerify = true // #nosec G402
+   ```
+
+6. **Review all suppressions in PR.** Any `//nolint` line should be called out
+   in the PR description so reviewers can evaluate the justification.
+
+---
+
 ## Phase 7 — CI/CD
 
 ### 7.1 `.github/workflows/ci.yml`
@@ -853,5 +958,7 @@ Before marking any PR ready for review, confirm:
 - [ ] Error wrapping: `fmt.Errorf("operation name: %w", err)` everywhere
 - [ ] Destructive tools require `confirmed: true` and are gated by `allowDestructive`
 - [ ] Table-driven tests cover happy path + pagination + error paths
+- [ ] `.golangci.yml` committed; `make lint` passes with zero findings
+- [ ] Every `//nolint` directive names the specific linter and includes a reason comment
 - [ ] README tools table is up to date
 - [ ] PLAN.md phases are marked complete
