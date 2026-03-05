@@ -23,12 +23,14 @@ Work through each section below in order, collect findings, then produce a
 
 Confirm the unifi-mcp server is configured and the following tools are available:
 `list_clients`, `list_devices`, `list_firewall_policies`, `list_acl_rules`,
-`list_wifi_broadcasts`, `list_networks`, `list_firewall_zones`, `list_dns_policies`,
-`list_vpn_tunnels`, `list_vpn_servers`, `get_device_stats`, `list_pending_devices`,
-`list_vouchers`, `list_radius_profiles`.
+`get_acl_rule_ordering`, `list_traffic_matching_lists`, `list_wifi_broadcasts`,
+`list_networks`, `list_firewall_zones`, `list_dns_policies`, `list_vpn_tunnels`,
+`list_vpn_servers`, `get_device_stats`, `list_pending_devices`, `list_vouchers`,
+`list_radius_profiles`.
 
 If destructive tools are enabled (`UNIFI_ALLOW_DESTRUCTIVE=true`), note that this
-audit may surface items you want to remediate in the same session.
+audit may surface items you want to remediate in the same session. The optional
+`delete_voucher` tool is used in Section 8 only when destructive tools are enabled.
 
 ---
 
@@ -41,7 +43,8 @@ audit may surface items you want to remediate in the same session.
 
 2. Call `list_pending_devices`. Any device visible on the network but **not yet
    adopted** is a potential rogue or misconfigured device. Flag all results as
-   **Medium** findings.
+   **[HIGH]** findings — an unadopted device has unrestricted access to the network
+   and its origin is unverified.
 
 3. Call `list_clients` (paginate until complete). For each connected client note:
    - `name`, `macAddress`, `ipAddress`, `type`, `uplinkDeviceId`, `connectedAt`
@@ -215,11 +218,33 @@ unexpected tunnels exist.
 
 **Findings to raise:**
 - `[MEDIUM]` Vouchers with unlimited time and no data/bandwidth cap
-- `[LOW]` Large number of unused vouchers — consider revoking with `delete_voucher`
+- `[LOW]` Large number of unused vouchers — if destructive tools are enabled (`UNIFI_ALLOW_DESTRUCTIVE=true`) and you have appropriate authorization, consider revoking them with `delete_voucher`
 
 ---
 
-## Section 9 — Security limitations of unifi-mcp
+## Section 9 — RADIUS profile review
+
+**Goal:** Confirm RADIUS profiles are intentional and do not expose authentication
+services unnecessarily.
+
+1. Call `list_radius_profiles` (paginate until complete). For each profile note the
+   name, enabled state, and whether it is assigned to any SSID or network.
+
+**Check for:**
+- Any profile the owner does **not recognise** — flag `[HIGH]`
+- Profiles that are **enabled but not assigned** to any SSID or network — flag
+  `[LOW]`; unused RADIUS profiles are unnecessary configuration that can be confused
+  for active auth infrastructure
+- Profiles using shared secrets that are not rotated periodically — flag `[INFO]`
+  as a reminder to rotate
+
+**Findings to raise:**
+- `[HIGH]` Unrecognised RADIUS profiles
+- `[LOW]` Enabled RADIUS profiles not assigned to any SSID or network
+
+---
+
+## Section 10 — Security limitations of unifi-mcp
 
 The unifi-mcp tools expose the **configuration and inventory** APIs. Some
 security-relevant data is **not available** via these tools and requires direct
