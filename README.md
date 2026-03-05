@@ -7,6 +7,7 @@ A collection of [Agent Skills](https://agentskills.io/) for use with GitHub Copi
 | Skill | Description |
 |---|---|
 | [`generate-mcp`](skills/generate-mcp/SKILL.md) | End-to-end guide for building a production-quality Go MCP server — from API research through CI and release automation |
+| [`audit-network-security`](skills/audit-network-security/SKILL.md) | Structured security audit of a UniFi network using unifi-mcp: device inventory, firmware currency, WiFi config, firewall rules, segmentation, DNS anomalies, VPN, and voucher hygiene — produces a prioritised findings report |
 
 ## Usage
 
