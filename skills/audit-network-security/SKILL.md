@@ -32,6 +32,14 @@ If destructive tools are enabled (`UNIFI_ALLOW_DESTRUCTIVE=true`), note that thi
 audit may surface items you want to remediate in the same session. The optional
 `delete_voucher` tool is used in Section 8 only when destructive tools are enabled.
 
+### Pagination
+
+Every list tool that returns a `totalCount` field must be fully paginated. After
+the first call: if `totalCount > len(data)`, repeat the call with `offset += len(data)`
+(where `len(data)` is the number of items returned on the previous page) until
+`offset >= totalCount`. Do not rely on the `count` field to increment the offset—it
+may be absent or zero on some responses. Collect all pages before analysing results.
+
 ---
 
 ## Section 1 — Device inventory and rogue device detection
@@ -67,8 +75,8 @@ known CVEs.
 
 1. From the `list_devices` results collected in Section 1, check each device's
    `firmwareUpdatable` field.
-2. Call `get_device_stats` for any device that appears unhealthy (high CPU, high
-   memory, or long uptime without reboots may indicate a hung process).
+2. Call `get_device_stats` for **every** adopted device. Do not wait for a device
+   to appear unhealthy first — there is no way to determine that without calling it.
 
 **Findings to raise:**
 - `[HIGH]` Any device with `firmwareUpdatable: true` — outdated firmware is the
@@ -83,26 +91,37 @@ known CVEs.
 
 **Goal:** Verify SSIDs use strong encryption and guest networks are isolated.
 
-1. Call `list_wifi_broadcasts` (paginate until complete). For each broadcast note:
-   - `name` (SSID), `enabled`, `security` (or equivalent encryption field),
-     `guestPolicy` / `isGuest`, `hiddenSsid`
+1. Call `list_wifi_broadcasts` (paginate per the Pagination guidance above). For each
+   broadcast the following fields are available in the v1 API response:
+   - `name`, `enabled`, `hideName`
+   - `clientIsolationEnabled`
+   - `network.type` — `NATIVE` (management VLAN) or `SPECIFIC` (mapped to a named VLAN);
+     when `SPECIFIC`, `network.networkId` identifies which network
+   - `securityConfiguration.type` — e.g. `WPA2_WPA3_PERSONAL`, `WPA3_PERSONAL`,
+     `WPA2_PERSONAL`, `WPA2_ENTERPRISE`, `OPEN`
+   - `securityConfiguration.fastRoamingEnabled`
+   - `hotspotConfiguration.type` — present only on captive-portal / guest SSIDs
+
+   Cross-reference `network.networkId` against the network list from Section 4 to
+   identify which VLAN each SSID is mapped to.
 
 **Check for:**
-- Any SSID with **open (no encryption)** — flag `[CRITICAL]`
-- Any SSID with **WEP or WPA (TKIP)** — flag `[HIGH]`; only WPA2-AES or WPA3 are
-  acceptable
-- Any SSID marked as guest that does **not** have client isolation or a guest
-  policy — flag `[HIGH]`
-- Any **non-guest SSID** shared with IoT or untrusted devices — flag `[MEDIUM]`;
-  recommend a dedicated IoT SSID on a separate VLAN
-- SSIDs that are **enabled but not in use** (no associated clients) — flag
-  `[LOW]`; unnecessary broadcast surface
+- Any SSID where `securityConfiguration.type` is `OPEN` — flag `[CRITICAL]`
+- Any SSID where `securityConfiguration.type` is `WPA2_PERSONAL` without WPA3 — flag
+  `[MEDIUM]`; prefer `WPA2_WPA3_PERSONAL` or `WPA3_PERSONAL`
+- Any SSID that has a `hotspotConfiguration` (captive portal / guest) but
+  `clientIsolationEnabled: false` — flag `[HIGH]`; guest clients can reach each other
+- If one or more SSIDs are `enabled: true` yet the Section 1 client list
+  contains **zero** `type: WIRELESS` clients at all — flag `[LOW]`; suggests either
+  no wireless devices are active or the audit was run at an unusual time. Note:
+  the `list_clients` response does not include which specific SSID a client is
+  connected to, so per-SSID utilisation cannot be determined programmatically.
 
 **Findings to raise:**
-- `[CRITICAL]` Open or WEP-encrypted SSIDs
-- `[HIGH]` WPA-TKIP SSIDs; guest SSIDs without isolation
-- `[MEDIUM]` IoT devices on primary SSID
-- `[LOW]` Enabled but unused SSIDs
+- `[CRITICAL]` Open SSIDs
+- `[HIGH]` Guest/captive-portal SSIDs without client isolation
+- `[MEDIUM]` WPA2-only SSIDs (no WPA3)
+- `[LOW]` Possibly unused WiFi surface (enabled SSIDs but no wireless clients observed)
 
 ---
 
@@ -119,8 +138,8 @@ boundaries (LAN, IoT, guest, management).
 **Check for:**
 - All traffic in a single flat network (no VLANs) — flag `[MEDIUM]`; recommend
   at minimum: LAN, IoT, Guest
-- Firewall zones defined but no policies between them — flag `[MEDIUM]` (zones
-  without policies provide no actual isolation)
+- Firewall zones defined but no policies between them — flag `[MEDIUM]`
+  (zones without policies provide no actual isolation)
 - IoT devices sharing a zone with trusted LAN devices — flag `[MEDIUM]`
 
 **Findings to raise:**
@@ -134,20 +153,24 @@ boundaries (LAN, IoT, guest, management).
 **Goal:** Ensure firewall rules follow least-privilege and have no permissive
 rules that undermine segmentation.
 
-1. Call `list_firewall_policies` (paginate until complete). For each policy note:
-   - `name`, `enabled`, `action` (ALLOW/BLOCK), source zone, destination zone,
-     description if present
+1. Build a zone ID→name map from the `list_firewall_zones` results collected in
+   Section 4. All firewall policies reference zones by UUID only — you must resolve
+   IDs to names before any analysis is meaningful.
 
-2. Call `list_acl_rules` and `get_acl_rule_ordering`. Note the evaluation order
+2. Call `list_firewall_policies` (paginate per the Pagination guidance above). For
+   each policy resolve the source and destination zone IDs to names using the map
+   built above, then note: `name`, `enabled`, `action` (ALLOW/BLOCK), source zone
+   name, destination zone name.
+
+3. Call `list_acl_rules` and `get_acl_rule_ordering`. Note the evaluation order
    — rules are evaluated top-down and the first match wins.
 
-3. Call `list_traffic_matching_lists` to understand what IP/port sets the
+4. Call `list_traffic_matching_lists` to understand what IP/port sets the
    policies reference.
 
 **Check for:**
 - Any `ALLOW` policy from a **less trusted zone to a more trusted zone** with no
-  specific port/protocol constraint (i.e. allow-all from IoT → LAN) — flag
-  `[HIGH]`
+  specific port/protocol constraint (i.e. allow-all from IoT → LAN) — flag `[HIGH]`
 - Any policy or ACL rule that is **disabled** — flag `[LOW]`; disabled rules are
   often forgotten; confirm they are intentionally inactive
 - Any `ALLOW` rule that **shadows** a later `BLOCK` rule (broad ALLOW before
@@ -189,10 +212,8 @@ rules that undermine segmentation.
 **Goal:** Ensure VPN tunnels and servers are correctly configured and no
 unexpected tunnels exist.
 
-1. Call `list_vpn_tunnels`. For each tunnel note the name, status, and remote
-   endpoint.
-2. Call `list_vpn_servers`. For each server note the name, enabled state, and
-   protocol.
+1. Call `list_vpn_tunnels`. For each tunnel note the name, status, and remote endpoint.
+2. Call `list_vpn_servers`. For each server note the name, enabled state, and protocol.
 
 **Check for:**
 - Any tunnel or server the owner does **not recognise** — flag `[HIGH]`
@@ -212,35 +233,38 @@ unexpected tunnels exist.
 **Goal:** Ensure no stale vouchers grant persistent or unintended network access.
 
 1. Call `list_vouchers` (paginate until complete). Note any vouchers with:
-   - No expiry (`time_limit_minutes: 0`) — unlimited time vouchers are risky
-   - No data cap (`data_limit_mb: 0`) — unlimited data vouchers can be abused
-   - No bandwidth limit — unlimited bandwidth vouchers can saturate the WAN
+   - No expiry (`timeLimitMinutes: 0`) — unlimited time vouchers are risky
+   - No data cap (`dataLimitMb: 0`) — unlimited data vouchers can be abused
+   - Bandwidth limits are not exposed in `list_vouchers` output — if needed,
+     review voucher bandwidth settings manually in the UniFi controller UI
 
 **Findings to raise:**
-- `[MEDIUM]` Vouchers with unlimited time and no data/bandwidth cap
-- `[LOW]` Large number of unused vouchers — if destructive tools are enabled (`UNIFI_ALLOW_DESTRUCTIVE=true`) and you have appropriate authorization, consider revoking them with `delete_voucher`
+- `[MEDIUM]` Vouchers with unlimited time and no data cap
+- `[LOW]` Large number of unused vouchers — if destructive tools are enabled
+  (`UNIFI_ALLOW_DESTRUCTIVE=true`) and you have appropriate authorization,
+  consider revoking them with `delete_voucher`
 
 ---
 
 ## Section 9 — RADIUS profile review
 
-**Goal:** Confirm RADIUS profiles are intentional and do not expose authentication
-services unnecessarily.
+**Goal:** Confirm RADIUS profiles are intentional and do not expose
+authentication services unnecessarily.
 
-1. Call `list_radius_profiles` (paginate until complete). For each profile note the
-   name, enabled state, and whether it is assigned to any SSID or network.
+1. Call `list_radius_profiles` (paginate per the Pagination guidance above).
+
+> **Note:** The v1 WiFi broadcasts endpoint does not return a RADIUS profile ID, so
+> it is not possible to programmatically cross-reference which SSIDs use each profile.
+> Confirm RADIUS/802.1X assignment manually in UniFi UI → WiFi → [each SSID] → Security.
 
 **Check for:**
 - Any profile the owner does **not recognise** — flag `[HIGH]`
-- Profiles that are **enabled but not assigned** to any SSID or network — flag
-  `[LOW]`; unused RADIUS profiles are unnecessary configuration that can be confused
-  for active auth infrastructure
 - Profiles using shared secrets that are not rotated periodically — flag `[INFO]`
   as a reminder to rotate
 
 **Findings to raise:**
 - `[HIGH]` Unrecognised RADIUS profiles
-- `[LOW]` Enabled RADIUS profiles not assigned to any SSID or network
+- `[INFO]` Shared secrets not rotated recently
 
 ---
 
@@ -252,6 +276,8 @@ access to the UniFi console UI or syslog:
 
 | Data type | Where to find it |
 |---|---|
+| WiFi passphrases and RADIUS/802.1X credentials | UniFi UI → WiFi → [each SSID] → Security |
+| RADIUS profile → SSID assignment | UniFi UI → WiFi → [each SSID] → Security |
 | IDS/IPS threat alerts | UniFi UI → Security → Threat Management |
 | Traffic anomaly alerts | UniFi UI → Security → Traffic Anomalies |
 | Client block/connection events | UniFi UI → Clients → select client → History |
