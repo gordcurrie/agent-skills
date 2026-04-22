@@ -320,7 +320,7 @@ One exported method per API operation. Follow the consistent error-wrapping patt
 ```go
 // ListWidgets returns a page of widgets for the given site.
 func (c *Client) ListWidgets(ctx context.Context, siteID string, offset, limit int) (Page[Widget], error) {
-    path := fmt.Sprintf("/integration/v1/sites/%s/widgets", c.site(siteID))
+    path := fmt.Sprintf("/integration/v1/sites/%s/widgets", url.PathEscape(c.site(siteID)))
     raw, err := c.getWithQuery(ctx, path, offset, limit)
     if err != nil {
         return Page[Widget]{}, fmt.Errorf("ListWidgets %s: %w", siteID, err)
@@ -328,6 +328,41 @@ func (c *Client) ListWidgets(ctx context.Context, siteID string, offset, limit i
     return decode[Page[Widget]](raw)
 }
 ```
+
+> **`url.PathEscape()` for user-supplied segments**: always wrap values interpolated into
+> URL path segments (site IDs, resource IDs, node names, etc.) with `url.PathEscape()`.
+> This encodes characters like `/`, `%`, and spaces that would otherwise break routing or
+> allow unintended path traversal.
+
+### 2.4 `SensitiveString` type
+
+If the API credential (key, token, password) is stored on the `Client` struct, use a
+`SensitiveString` type to prevent accidental logging:
+
+```go
+// SensitiveString is a string whose value is redacted in all fmt and slog output.
+type SensitiveString string
+
+// Format implements fmt.Formatter, overriding all format verbs including %x/%X
+// which would otherwise bypass String() and expose the underlying value.
+func (s SensitiveString) Format(f fmt.State, _ rune)     { fmt.Fprint(f, "[REDACTED]") }
+func (s SensitiveString) String() string                 { return "[REDACTED]" }
+func (s SensitiveString) GoString() string               { return "[REDACTED]" }
+func (s SensitiveString) MarshalJSON() ([]byte, error)   { return json.Marshal(string(s)) }
+func (s SensitiveString) LogValue() slog.Value           { return slog.StringValue("[REDACTED]") }
+```
+
+Change the credential field in `Client` from `apiKey string` to `apiKey SensitiveString`.
+When passing the value to an API request, convert explicitly:
+
+```go
+req.Header.Set("X-API-Key", string(c.apiKey))
+```
+
+> **Why `fmt.Formatter`?** For a named string type, `String()` is called for `%s`/`%v`
+> but not for `%x`, `%X`, `%b`, or other verbs — those access the underlying string bytes
+> directly. Implementing `fmt.Formatter` intercepts every verb and ensures the credential
+> is never exposed regardless of how it is formatted.
 
 ---
 
@@ -364,9 +399,11 @@ import (
     "github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-// jsonResult marshals v to a JSON TextContent result.
+// jsonResult marshals v to a compact JSON TextContent result.
+// Uses json.Marshal (not MarshalIndent) — compact JSON reduces token usage ~15%
+// with no quality loss for LLM consumers.
 func jsonResult(v any) (*mcp.CallToolResult, any, error) {
-    b, err := json.MarshalIndent(v, "", "  ")
+    b, err := json.Marshal(v)
     if err != nil {
         return errorResult(fmt.Errorf("marshal result: %w", err))
     }
@@ -862,6 +899,72 @@ jobs:
           files: dist/*
           generate_release_notes: true
 ```
+
+### 7.3 `.github/workflows/test-latest.yml`
+
+Run the test suite daily against the latest stable Go and the latest versions of all
+dependencies. Catches upstream breaking changes early, before they reach your main branch.
+
+```yaml
+name: Test with latest dependencies
+
+on:
+  schedule:
+    - cron: "22 10 * * *"   # daily at 10:22 UTC
+  workflow_dispatch:
+
+jobs:
+  test-latest:
+    name: latest Go + latest deps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+          cache: true
+      - name: Upgrade all dependencies
+        run: go get -u -t ./...
+      - name: Test with race detector
+        run: go test -race -count=1 ./...
+```
+
+### 7.4 `.github/workflows/govulncheck.yml`
+
+Run `govulncheck` daily as a standalone security gate independent of push-triggered CI.
+This catches newly disclosed CVEs in your transitive dependencies even when no code changes.
+
+```yaml
+name: Security — govulncheck
+
+on:
+  schedule:
+    - cron: "22 10 * * *"   # daily at 10:22 UTC
+  workflow_dispatch:
+
+jobs:
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
+```
+
+> **`persist-credentials: false`** on both daily workflows: these jobs only read code and
+> run tests — they never push. Disabling credential persistence reduces the blast radius
+> if a dependency or tool is compromised.
 
 ---
 
