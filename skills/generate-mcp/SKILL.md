@@ -313,25 +313,6 @@ type Page[T any] struct {
 }
 ```
 
-### 2.4 `SensitiveString` type
-
-If the API credential (key, token, password) is stored on the `Client` struct, use a
-`SensitiveString` type to prevent accidental logging:
-
-```go
-// SensitiveString is a string whose value is redacted in fmt and slog output.
-type SensitiveString string
-
-func (s SensitiveString) String() string                 { return "[REDACTED]" }
-func (s SensitiveString) GoString() string               { return "[REDACTED]" }
-func (s SensitiveString) MarshalJSON() ([]byte, error)   { return json.Marshal(string(s)) }
-func (s SensitiveString) LogValue() slog.Value           { return slog.StringValue("[REDACTED]") }
-```
-
-Change the credential field in `Client` from `apiKey string` to `apiKey SensitiveString`.
-The real value is only written to API requests via the `req.Header.Set(...)` call, where
-`string(c.apiKey)` is used explicitly.
-
 ### 2.3 Group files (`internal/<pkg>/<group>.go`)
 
 One exported method per API operation. Follow the consistent error-wrapping pattern:
@@ -352,6 +333,36 @@ func (c *Client) ListWidgets(ctx context.Context, siteID string, offset, limit i
 > URL path segments (site IDs, resource IDs, node names, etc.) with `url.PathEscape()`.
 > This encodes characters like `/`, `%`, and spaces that would otherwise break routing or
 > allow unintended path traversal.
+
+### 2.4 `SensitiveString` type
+
+If the API credential (key, token, password) is stored on the `Client` struct, use a
+`SensitiveString` type to prevent accidental logging:
+
+```go
+// SensitiveString is a string whose value is redacted in all fmt and slog output.
+type SensitiveString string
+
+// Format implements fmt.Formatter, overriding all format verbs including %x/%X
+// which would otherwise bypass String() and expose the underlying value.
+func (s SensitiveString) Format(f fmt.State, _ rune)     { fmt.Fprint(f, "[REDACTED]") }
+func (s SensitiveString) String() string                 { return "[REDACTED]" }
+func (s SensitiveString) GoString() string               { return "[REDACTED]" }
+func (s SensitiveString) MarshalJSON() ([]byte, error)   { return json.Marshal(string(s)) }
+func (s SensitiveString) LogValue() slog.Value           { return slog.StringValue("[REDACTED]") }
+```
+
+Change the credential field in `Client` from `apiKey string` to `apiKey SensitiveString`.
+When passing the value to an API request, convert explicitly:
+
+```go
+req.Header.Set("X-API-Key", string(c.apiKey))
+```
+
+> **Why `fmt.Formatter`?** For a named string type, `String()` is called for `%s`/`%v`
+> but not for `%x`, `%X`, `%b`, or other verbs — those access the underlying string bytes
+> directly. Implementing `fmt.Formatter` intercepts every verb and ensures the credential
+> is never exposed regardless of how it is formatted.
 
 ---
 
